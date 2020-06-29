@@ -42,7 +42,7 @@ func patch(c Connection, endpoint string, form []byte) (*http.Response, error) {
         accessToken, err := c.accessToken()
 
         // Execute the request
-        request, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(form))
+        request, err := http.NewRequest("PATCH", endpoint, bytes.NewBuffer(form))
         if err != nil {
                 return nil, err // An error indicates that the endpoint is incorect
         }
@@ -90,5 +90,11 @@ func post(c Connection, endpoint string, form []byte) (*http.Response, error) {
                 return nil, err
         }
 
-        return response, nil
+        // A post should only ever return one of these two status codes
+        if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
+                return response, nil
+        }
+
+        return response, errStatusCode
+
 }

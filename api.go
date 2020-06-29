@@ -83,34 +83,24 @@ func (c *Connection) Test() error {
 }
 
 // GetListItems will create the appropriate GET request to SharePoint online from the Authentication, listName, and queryString object
-// and map the result onto the output interface.
-//
-// The output interface must be a pointer (otherwise err) and should be an empty array.
-func (c *Connection) GetListItems(output interface{}, listName string, queryString string) error {
-
-        if output == nil {
-                return errNil
-        }
+// and map the result onto a new interface.
+func (c *Connection) GetListItems(listName string, queryString string) (RawSharePointResponse, error) {
 
         // Standard endpoint format to get items from an SP list
         endpoint := fmt.Sprintf("%s/_api/web/lists/getbytitle('%s')/items?%s", c.URLHost, listName, queryString)
 
-        return getListItems(*c, output, endpoint)
+        return getItems(*c, endpoint)
 }
 
 // GetListItemByID populates the output interface with values returned from a sharepoint query where the itemID is specified.
 //
 // If the itemID is blank, all items from the list will be returned.
-func (c *Connection) GetListItemByID(output interface{}, listName string, itemID string, queryString string) error {
-
-        if output == nil {
-                return errNil
-        }
+func (c *Connection) GetListItemByID(listName string, itemID string, queryString string) (RawSharePointResponse, error) {
 
         // Standard endpoint format to get items from an SP list
         endpoint := fmt.Sprintf("%s/_api/web/lists/getbytitle('%s')/items(%s)?%s", c.URLHost, listName, itemID, queryString)
 
-        return getListItems(*c, output, endpoint)
+        return getItems(*c, endpoint)
 }
 
 // InsertListItem adds a new Marshalled JSON object to the specified Sharepoint list.
@@ -143,6 +133,36 @@ func (c *Connection) UpdateListItem(listName string, item interface{}, id int, f
 
         return updateListItem(*c, listName, item, endpoint, id, fields...)
 
+}
+
+// GetDocumentLibraryItems will go out the SharePoint site and return an array of items from the specified library. When the list returns empty, an emtpy array will be returned.
+func (c *Connection) GetDocumentLibraryItems(folderRelativePath string) (RawSharePointResponse, error) {
+
+        endpoint := fmt.Sprintf("%s/_api/web/GetFolderByServerRelativeUrl('%s')/files", c.URLHost, folderRelativePath)
+
+        return getItems(*c, endpoint)
+}
+
+// DownloadDocumentLibraryFile returns the byte array pertaining to a file in the passed in document library. If the file is not available, an error is returned.
+func (c *Connection) DownloadDocumentLibraryFile(folderRelativePath string, fileName string) ([]byte, error) {
+
+        endpoint := fmt.Sprintf("%s/_api/web/GetFolderByServerRelativeUrl('%s')/files('%s')/$value", c.URLHost, folderRelativePath, fileName)
+
+        return download(*c, endpoint)
+}
+
+// UploadDocumentLibraryFile performs a POST request to upload the specified file.
+func (c *Connection) UploadDocumentLibraryFile(folderRelativePath string, fileName string, overwriteOnConflict bool, file []byte) error {
+
+        overwriteFlag := "true"
+        if !overwriteOnConflict {
+                overwriteFlag = "false"
+        }
+
+        endpoint := fmt.Sprintf("%s/_api/web/GetFolderByServerRelativeUrl('%s')/files/add(url='%s',overwrite=%s)", c.URLHost, folderRelativePath, fileName, overwriteFlag)
+
+        _, err := post(*c, endpoint, file)
+        return err
 }
 
 // ToTimeHookFunc is a custom decoder for mapstructure which analyzes if the value being parsed can be converted to a time object
@@ -237,8 +257,26 @@ func baseType(t reflect.Type, expected reflect.Kind) (reflect.Type, error) {
         return base, nil
 }
 
-// getListItems is the internal function to map the result from the endpoint passed in to the output interface.
-func getListItems(c Connection, output interface{}, endpoint string) error {
+func download(c Connection, endpoint string) ([]byte, error) {
+
+        // Execute the request and get the response body
+        body, httpStatus, err := get(c, endpoint)
+        if err != nil {
+                return nil, err
+        }
+
+        // If the status code returned is not what was expected, throw an error
+        if httpStatus != http.StatusOK {
+                return nil, errStatusCode
+        }
+
+        // If a file is being downloaded, then the response body *is* the file contents
+        return body, nil
+
+}
+
+// retreive the specified items from the SharePoint list and return them in a RawSharePointResponse object
+func getItems(c Connection, endpoint string) (RawSharePointResponse, error) {
 
         // Read in the response to the raw struct container
         var rawSPResponse RawSharePointResponse
@@ -246,18 +284,18 @@ func getListItems(c Connection, output interface{}, endpoint string) error {
         // Execute the request and get the response body
         body, httpStatus, err := get(c, endpoint)
         if err != nil {
-                return err
+                return rawSPResponse, err
         }
 
         // If 404 returned, no items were found and we can return early
         if httpStatus == http.StatusNotFound {
-                return nil
+                return rawSPResponse, nil
         }
 
         // The response should be a standard response body from SharePoint, where the data is contained in the Value field
         err = json.Unmarshal(body, &rawSPResponse)
         if err != nil {
-                return errUnmarshal
+                return rawSPResponse, errUnmarshal
         }
 
         // If the value field is nil, it is because a single item response was returned but was not decoded
@@ -267,14 +305,15 @@ func getListItems(c Connection, output interface{}, endpoint string) error {
                 var values []interface{}
 
                 json.Unmarshal(body, &singleItem)
+                if err != nil {
+                        return rawSPResponse, errUnmarshal
+                }
                 rawSPResponse = RawSharePointResponse{
                         Value: append(values, singleItem),
                 }
-
         }
 
-        return scanSPResponse(rawSPResponse, output)
-
+        return rawSPResponse, nil
 }
 
 func insertListItem(c Connection, item interface{}, endpoint string, fields ...string) error {
@@ -339,9 +378,16 @@ func insertListItem(c Connection, item interface{}, endpoint string, fields ...s
         return nil
 }
 
-// scanSPResponse converts a RawSharePointResponse (assuming it has data) into the data type of the output variable.
+// ScanResponse converts a RawSharePointResponse (assuming it has data) into the data type of the output variable.
 // This variable must be a pointer and must be an array since the type of RawSharePointResponse.Value is an array.
-func scanSPResponse(rawSPResponse RawSharePointResponse, output interface{}) error {
+func (c *Connection) ScanResponse(rawSPResponse RawSharePointResponse, output interface{}) error {
+
+        return scanResponse(rawSPResponse, output)
+}
+
+// scanResponse converts a RawSharePointResponse (assuming it has data) into the data type of the output variable.
+// This variable must be a pointer and must be an array since the type of RawSharePointResponse.Value is an array.
+func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error {
 
         // With a valid response, we can use reflection to map it to the output interface
         // Logic very heavily inspired from the encoding implementation of the github.com/jmoiron/sqlx package
@@ -354,6 +400,7 @@ func scanSPResponse(rawSPResponse RawSharePointResponse, output interface{}) err
         if value.Kind() != reflect.Ptr {
                 return fmt.Errorf("Must pass a pointer, not a value, to StructScan destination")
         }
+
         if value.IsNil() {
                 return errNil
         }
