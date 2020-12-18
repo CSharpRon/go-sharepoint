@@ -223,6 +223,7 @@ func (c *Connection) accessToken() (string, error) {
 			return "", err
 		}
 
+		req.Header.Add("Accept", "application/json;odata=nometadata")
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		res, err := client.Do(req)
 		if err != nil {
@@ -456,6 +457,17 @@ func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error
 					outputEntryMap[key] = fmt.Sprint(v)
 				case bool:
 					outputEntryMap[key] = fmt.Sprint(v)
+				case map[string]interface{}:
+					if len(v) == 1 {
+						for _, iv := range v {
+							switch v3 := iv.(type) {
+							case string:
+								outputEntryMap[key] = v3
+							default:
+								continue
+							}
+						}
+					}
 				case []interface{}:
 					var j []string
 					for _, f := range v {
@@ -470,6 +482,17 @@ func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error
 							j = append(j, fmt.Sprint(v2))
 						case float64:
 							j = append(j, fmt.Sprint(v2))
+						case map[string]interface{}:
+							if len(v2) == 1 {
+								for _, ivv := range v2 {
+									switch v4 := ivv.(type) {
+									case string:
+										j = append(j, v4)
+									default:
+										continue
+									}
+								}
+							}
 						default:
 							continue
 						}
