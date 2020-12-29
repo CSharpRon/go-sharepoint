@@ -30,14 +30,14 @@ import (
 )
 
 var (
-	nilError              = fmt.Errorf("Unable to map response body to output: variable is nil")
-	marshalError          = fmt.Errorf("Unable to marshal the input to a JSON object")
-	statusCodeError       = fmt.Errorf("Unexpected status code returned from the SharePoint service")
-	unmarshalError        = fmt.Errorf("Unable to cast SharePoint response body to raw struct")
-	idError               = fmt.Errorf("Missing or invalid ID passed in")
-	nonJSONError          = fmt.Errorf("Item is not a valid json object")
-	valueNonPointerError  = fmt.Errorf("Must pass a pointer, not a value, to StructScan destination")
-	noSliceInPointerError = fmt.Errorf("Unable to get slice of pointer object")
+	errNil              = fmt.Errorf("Unable to map response body to output: variable is nil")
+	errMarshal          = fmt.Errorf("Unable to marshal the input to a JSON object")
+	errStatusCode       = fmt.Errorf("Unexpected status code returned from the SharePoint service")
+	errUnMarshal        = fmt.Errorf("Unable to cast SharePoint response body to raw struct")
+	errID               = fmt.Errorf("Missing or invalid ID passed in")
+	errNonJSON          = fmt.Errorf("Item is not a valid json object")
+	errValueNonPointer  = fmt.Errorf("Must pass a pointer, not a value, to StructScan destination")
+	errNoSliceInPointer = fmt.Errorf("Unable to get slice of pointer object")
 )
 
 // Connection holds the configuration settings for the SharePoint online connection.
@@ -127,7 +127,7 @@ func (c *Connection) InsertListItem(listName string, item interface{}, fields ..
 func (c *Connection) UpdateListItem(listName string, item interface{}, id int, fields ...string) error {
 
 	if id == 0 {
-		return idError
+		return errID
 	}
 
 	// Standard endpoint format to insert items into a list
@@ -270,7 +270,7 @@ func download(c Connection, endpoint string) ([]byte, error) {
 
 	// If the status code returned is not what was expected, throw an error
 	if httpStatus != http.StatusOK {
-		return nil, statusCodeError
+		return nil, errStatusCode
 	}
 
 	// If a file is being downloaded, then the response body *is* the file contents
@@ -298,7 +298,7 @@ func getItems(c Connection, endpoint string) (RawSharePointResponse, error) {
 	// The response should be a standard response body from SharePoint, where the data is contained in the Value field
 	err = json.Unmarshal(body, &rawSPResponse)
 	if err != nil {
-		return rawSPResponse, unmarshalError
+		return rawSPResponse, errUnMarshal
 	}
 
 	// If the value field is nil, it is because a single item response was returned but was not decoded
@@ -309,7 +309,7 @@ func getItems(c Connection, endpoint string) (RawSharePointResponse, error) {
 
 		json.Unmarshal(body, &singleItem)
 		if err != nil {
-			return rawSPResponse, unmarshalError
+			return rawSPResponse, errUnMarshal
 		}
 		rawSPResponse = RawSharePointResponse{
 			Value: append(values, singleItem),
@@ -338,7 +338,7 @@ func insertListItem(c Connection, item interface{}, endpoint string, fields ...s
 
 		cleanSheet, err = json.Marshal(validMap)
 		if err != nil {
-			return marshalError
+			return errMarshal
 		}
 
 	} else {
@@ -363,7 +363,7 @@ func insertListItem(c Connection, item interface{}, endpoint string, fields ...s
 
 		cleanSheet, err = json.Marshal(validMap)
 		if err != nil {
-			return marshalError
+			return errMarshal
 		}
 
 	}
@@ -375,7 +375,7 @@ func insertListItem(c Connection, item interface{}, endpoint string, fields ...s
 
 	// Only status code 201 indicates that the item was created
 	if response.StatusCode != 201 {
-		return statusCodeError
+		return errStatusCode
 	}
 
 	return nil
@@ -402,17 +402,17 @@ func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error
 
 	// Check for errors
 	if value.Kind() != reflect.Ptr {
-		return valueNonPointerError
+		return errValueNonPointer
 	}
 	if value.IsNil() {
-		return nilError
+		return errNil
 	}
 
 	// Get the object that the pointer is holding
 	direct := reflect.Indirect(value)
 	slice, err := baseType(value.Type(), reflect.Slice)
 	if err != nil {
-		return noSliceInPointerError
+		return errNoSliceInPointer
 	}
 	isPtr := slice.Elem().Kind() == reflect.Ptr
 
@@ -428,102 +428,25 @@ func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error
 		// Make a new instance of the output's base type
 		vp = reflect.New(base)
 
-		// If the passed in output is a map of strings, we can do manual work to convert each object to a string
-		if fmt.Sprint(reflect.TypeOf(output)) == "*[]map[string]string" &&
+		entryMap := responseToMap(r)
+
+		// If the passed in output is an interface map, we just return the map
+		if fmt.Sprint(reflect.TypeOf(output)) == "*[]map[string]interface {}" &&
 			fmt.Sprint(reflect.TypeOf(r)) == "map[string]interface {}" {
 
-			// Needed for range to work
-			c := r.(map[string]interface{})
-
-			outputEntryMap := make(map[string]string)
-
-			for key, field := range c {
-				if field == nil {
-					outputEntryMap[key] = ""
-					continue
-				}
-				switch v := field.(type) {
-				case string:
-					outputEntryMap[key] = v
-				case []string:
-					outputEntryMap[key] = strings.Join(v, ",")
-				case float32:
-					outputEntryMap[key] = fmt.Sprint(v)
-				case float64:
-					outputEntryMap[key] = fmt.Sprint(v)
-				case int32:
-					outputEntryMap[key] = fmt.Sprint(v)
-				case int64:
-					outputEntryMap[key] = fmt.Sprint(v)
-				case bool:
-					outputEntryMap[key] = fmt.Sprint(v)
-				case map[string]interface{}:
-					if len(v) == 1 {
-						for _, iv := range v {
-							switch v3 := iv.(type) {
-							case string:
-								outputEntryMap[key] = v3
-							default:
-								continue
-							}
-						}
-					}
-				case []interface{}:
-					var j []string
-					for _, f := range v {
-						switch v2 := f.(type) {
-						case string:
-							j = append(j, v2)
-						case int32:
-							j = append(j, fmt.Sprint(v2))
-						case int64:
-							j = append(j, fmt.Sprint(v2))
-						case float32:
-							j = append(j, fmt.Sprint(v2))
-						case float64:
-							j = append(j, fmt.Sprint(v2))
-						case map[string]interface{}:
-							if len(v2) == 1 {
-								for _, ivv := range v2 {
-									switch v4 := ivv.(type) {
-									case string:
-										j = append(j, v4)
-									default:
-										continue
-									}
-								}
-							}
-						default:
-							continue
-						}
-					}
-					if len(j) > 0 {
-						outputEntryMap[key] = strings.Join(j, ",")
-					}
-				default:
-					continue
-				}
-			}
-
 			// Get the value of the map we just populated
-			vp = reflect.ValueOf(outputEntryMap)
+			vp = reflect.ValueOf(entryMap)
 
 		} else {
-
-			responseMap := make(map[string]interface{})
 
 			mapDecoder := mapstructure.DecoderConfig{
 				TagName:    "sharepoint",
 				Result:     vp.Interface(),
 				DecodeHook: mapstructure.ComposeDecodeHookFunc(ToTimeHookFunc())}
 
-			// Marshal the object back into bytes and then convert it into a map
-			singleItem, _ := json.Marshal(r)
-			json.Unmarshal(singleItem, &responseMap)
-
 			// Using the custom decoder which looks for the sharepoint struct tag, decode the valid to the vp object
 			decoder, _ := mapstructure.NewDecoder(&mapDecoder)
-			err = decoder.Decode(responseMap)
+			err = decoder.Decode(entryMap)
 
 		}
 
@@ -537,6 +460,64 @@ func scanResponse(rawSPResponse RawSharePointResponse, output interface{}) error
 
 	// All good!
 	return nil
+}
+
+// responseToStringMap converts a single entry from the SharePoint response into a map[string]string
+//
+// Objects with nested objects (such as Author: {Title}) will get a single entry into the map joined by a dot (e.g., Author.Title)
+func responseToMap(r interface{}) map[string]interface{} {
+
+	// Needed for range to work
+	c := r.(map[string]interface{})
+
+	outputEntryMap := make(map[string]interface{})
+
+	// For each key, we traverse one level down to extract the value and return it as an interface.
+	// When the value is an array, a "," joined string is returned.
+	for key, field := range c {
+		if field == nil {
+			outputEntryMap[key] = ""
+			continue
+		}
+		switch v := field.(type) {
+		case string, float32, float64, int32, int64, bool:
+			outputEntryMap[key] = v
+		case []string:
+			outputEntryMap[key] = strings.Join(v, ",")
+		case map[string]interface{}:
+			for ik, iv := range v {
+				switch v3 := iv.(type) {
+				default:
+					newKey := fmt.Sprintf("%s.%s", key, ik)
+					outputEntryMap[newKey] = v3
+				}
+			}
+		case []interface{}:
+			var j []string
+			for _, f := range v {
+				switch v2 := f.(type) {
+				case string, int32, int64, float32, float64:
+					j = append(j, fmt.Sprint(v2))
+				case map[string]interface{}:
+					for _, ivv := range v2 {
+						switch v4 := ivv.(type) {
+						default:
+							j = append(j, fmt.Sprint(v4))
+						}
+					}
+				default:
+					continue
+				}
+			}
+			if len(j) > 0 {
+				outputEntryMap[key] = strings.Join(j, ",")
+			}
+		default:
+			continue
+		}
+	}
+
+	return outputEntryMap
 }
 
 func updateListItem(c Connection, list string, item interface{}, endpoint string, sharepointid int, fields ...string) error {
@@ -559,7 +540,7 @@ func updateListItem(c Connection, list string, item interface{}, endpoint string
 		}
 		jsonBody, err = json.Marshal(validMap)
 		if err != nil {
-			return marshalError
+			return errMarshal
 		}
 	} else {
 
@@ -584,7 +565,7 @@ func updateListItem(c Connection, list string, item interface{}, endpoint string
 
 		jsonBody, err = json.Marshal(validMap)
 		if err != nil {
-			return marshalError
+			return errMarshal
 		}
 	}
 
@@ -595,7 +576,7 @@ func updateListItem(c Connection, list string, item interface{}, endpoint string
 
 	// Only status code 204 indicates success
 	if response.StatusCode != 204 {
-		return statusCodeError
+		return errStatusCode
 	}
 
 	return nil

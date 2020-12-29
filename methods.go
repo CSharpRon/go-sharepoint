@@ -95,6 +95,6 @@ func post(c Connection, endpoint string, form []byte) (*http.Response, error) {
 		return response, nil
 	}
 
-	return response, statusCodeError
+	return response, errStatusCode
 
 }
