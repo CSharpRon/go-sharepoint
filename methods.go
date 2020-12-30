@@ -39,6 +39,10 @@ func get(c Connection, endpoint string) ([]byte, int, error) {
 // patch returns the body from a PATCH response on the SharePoint API
 func patch(c Connection, endpoint string, form []byte) (*http.Response, error) {
 
+	if c.DisableMutations {
+		return &http.Response{StatusCode: http.StatusNoContent}, nil
+	}
+
 	accessToken, err := c.accessToken()
 
 	// Execute the request
@@ -68,6 +72,10 @@ func patch(c Connection, endpoint string, form []byte) (*http.Response, error) {
 
 // post returns the body from a POST request response on the SharePoint API
 func post(c Connection, endpoint string, form []byte) (*http.Response, error) {
+
+	if c.DisableMutations {
+		return &http.Response{StatusCode: http.StatusCreated}, nil
+	}
 
 	accessToken, err := c.accessToken()
 
