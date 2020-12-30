@@ -61,6 +61,9 @@ type Connection struct {
 	// DomainHost holds the fqdn to the SharePoint root URL such as constoso.sharepoint.com
 	DomainHost string `json:"-"`
 
+	// DisableMutations is a flag that when true disables insert and update operations (do this for non-production environments)
+	DisableMutations bool `json:"-"`
+
 	securityToken Token
 }
 
